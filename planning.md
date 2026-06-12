@@ -16,6 +16,7 @@ You must have at least 3 tools. The three required tools are listed — add any 
 
 **What it does:**
 <!-- Describe what this tool does in 1–2 sentences -->
+In the **data/listings.json** directory, searches the data and returns top 3 clothe that closely matches with the provided field and If no matches are found a  **clear failure/insufficient information respose**. is provided.
 
 **Input parameters:**
 <!-- List each parameter, its type, and what it represents -->
@@ -138,12 +139,20 @@ Write out what a full user interaction looks like from start to finish — tool 
 
 **Step 1:**
 <!-- What does the agent do first? Which tool is called? With what input? -->
+After the user provides the necessary fields in thier prompt, the agent will decide which words to use for the parameter of ``search_listings`` tool.
 
 **Step 2:**
 <!-- What happens next? What was returned from step 1? What tool is called now? -->
+If ``search_listings`` finds clothes similar to what user asked for, the respective tool will return top 3 closest matching. Using the result from ``search_listings`` and our existing wardrobe the agent will call on ``suggest_outfit`` tool.
+
+if ``search_listings`` finds **no** clothes similar to what user asked for, it will return a **clear failure/insufficient information respose**.
 
 **Step 3:**
 <!-- Continue until the full interaction is complete -->
+if ``suggest_outfit`` finds clothes in the wardrobe that pairs up well with the new clothe, one or more outfit comginations are returned. From the result of ``suggest_outfit`` and the new clothe information, the tool ``create_fit_card`` will called.
+
+if ``suggest_outfit`` finds **no** clothes in the wardrobe that pairs up with the new clothe it will return a **clear failure/insufficient information respose**.
 
 **Final output to user:**
 <!-- What does the user actually see at the end? -->
+Finally at the end the tool ``create_fit_card`` will generate a short, shareable description of a complete outfit similer to a caption of an instagram post.
