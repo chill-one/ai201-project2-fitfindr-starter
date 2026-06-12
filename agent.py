@@ -18,6 +18,8 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -47,6 +49,71 @@ def _new_session(query: str, wardrobe: dict) -> dict:
 
 # ── planning loop ─────────────────────────────────────────────────────────────
 
+def _parse_query(query: str) -> dict:
+    """
+    Extract search parameters from a natural language query.
+
+    This parser intentionally stays simple and deterministic for the mock
+    dataset: it pulls out a dollar amount after "under", "below", "max", or
+    "$", pulls out common size phrases, and treats the remaining text as the
+    item description.
+    """
+    query_text = (query or "").strip()
+    normalized = query_text.lower()
+
+    max_price = None
+    price_match = re.search(
+        r"(?:under|below|max(?:imum)?|less than|up to)\s*\$?\s*(\d+(?:\.\d{1,2})?)",
+        normalized,
+    )
+    if not price_match:
+        price_match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)", normalized)
+    if price_match:
+        max_price = float(price_match.group(1))
+
+    size = None
+    size_match = re.search(
+        r"(?:size|sz)\s*[:#-]?\s*(us\s*\d+(?:\.\d)?|w\d{2}(?:\s*l\d{2})?|[a-z]{1,3}(?:/[a-z]{1,3})?|\d+(?:\.\d)?)",
+        normalized,
+    )
+    if size_match:
+        size = size_match.group(1).upper()
+
+    description = normalized
+    description = re.sub(
+        r"(?:under|below|max(?:imum)?|less than|up to)\s*\$?\s*\d+(?:\.\d{1,2})?",
+        " ",
+        description,
+    )
+    description = re.sub(r"\$\s*\d+(?:\.\d{1,2})?", " ", description)
+    description = re.sub(
+        r"(?:in\s+)?(?:size|sz)\s*[:#-]?\s*(?:us\s*\d+(?:\.\d)?|w\d{2}(?:\s*l\d{2})?|[a-z]{1,3}(?:/[a-z]{1,3})?|\d+(?:\.\d)?)",
+        " ",
+        description,
+    )
+    description = re.sub(
+        r"\b(?:i'?m|i am|looking for|look for|find|want|need|show me|what'?s out there|and how would i style it|please|a|an|the|in)\b",
+        " ",
+        description,
+    )
+    description = re.sub(r"[^a-z0-9\s/-]", " ", description)
+    description = re.sub(r"\s+", " ", description).strip()
+
+    return {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
+    }
+
+
+def _looks_like_tool_error(response: str) -> bool:
+    """Return whether a tool string appears to be an actionable error message."""
+    if not isinstance(response, str) or not response.strip():
+        return True
+
+    lowered = response.lower()
+    return lowered.startswith("i need ") or lowered.startswith("i couldn't ")
+
 def run_agent(query: str, wardrobe: dict) -> dict:
     """
     Main agent entry point. Runs the FitFindr planning loop for a single
@@ -63,7 +130,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         first — if it is not None, the interaction ended early and the other
         output fields (outfit_suggestion, fit_card) will be None.
 
-    TODO — implement this function using the planning loop you designed in planning.md:
+    Implementation follows the planning loop designed in planning.md:
 
         Step 1: Initialize the session with _new_session().
 
@@ -89,12 +156,59 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
         Step 7: Return the session.
 
-    Before writing code, complete the Planning Loop and State Management sections
-    of planning.md — your implementation should match what you described there.
+    The completed session keeps each tool result in state so later tools can use
+    it without asking the user to re-enter information.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+    session["parsed"] = _parse_query(query)
+
+    description = session["parsed"]["description"]
+    size = session["parsed"]["size"]
+    max_price = session["parsed"]["max_price"]
+
+    if not description:
+        session["error"] = (
+            "I need to know what kind of item you're looking for before I can search."
+        )
+        return session
+
+    session["search_results"] = search_listings(description, size, max_price)
+    if not session["search_results"]:
+        details = [f'"{description}"']
+        if size:
+            details.append(f"size {size}")
+        if max_price is not None:
+            details.append(f"under ${max_price:g}")
+
+        session["error"] = (
+            "I couldn't find any listings matching "
+            f"{' '.join(details)}. Try a broader description, a different size, "
+            "or a higher budget."
+        )
+        return session
+
+    session["selected_item"] = session["search_results"][0]
+
+    outfit_suggestion = suggest_outfit(session["selected_item"], session["wardrobe"])
+    if _looks_like_tool_error(outfit_suggestion):
+        session["error"] = (
+            outfit_suggestion
+            if outfit_suggestion
+            else "I couldn't create an outfit suggestion for the selected item."
+        )
+        return session
+    session["outfit_suggestion"] = outfit_suggestion
+
+    fit_card = create_fit_card(session["outfit_suggestion"], session["selected_item"])
+    if _looks_like_tool_error(fit_card):
+        session["error"] = (
+            fit_card
+            if fit_card
+            else "I couldn't create a fit card from the outfit suggestion."
+        )
+        return session
+    session["fit_card"] = fit_card
+
     return session
 
 
