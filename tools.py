@@ -69,6 +69,7 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
+    
     # Replace this with your implementation
     return []
 
