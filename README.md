@@ -157,6 +157,62 @@ Current coverage includes:
 - Agent planning-loop integration tests showing success and no-results paths behave differently.
 - UI handler tests for mapping session fields into Gradio output panels.
 
+## AI Usage
+
+I used AI tools during implementation, but reviewed and changed the generated code before keeping it.
+
+### Instance 1: Tool implementation help
+
+Input given to AI:
+- The `planning.md` Tool Inventory sections for `search_listings`, `suggest_outfit`, and `create_fit_card`.
+- The `utils/data_loader.py` helper description, especially the requirement to use `load_listings()` instead of re-implementing file loading.
+- The dataset fields from `data/listings.json` and wardrobe item fields from `data/wardrobe_schema.json`.
+
+What the AI helped produce:
+- Initial implementation structure for the three tool functions.
+- Keyword matching and filtering logic for `search_listings`.
+- Groq prompt structure for `suggest_outfit` and `create_fit_card`.
+- Guard clauses for empty search results, empty wardrobes, empty outfit strings, and incomplete item dictionaries.
+
+What I reviewed, revised, or overrode:
+- I kept `search_listings` deterministic instead of using an LLM, because search should be testable and repeatable.
+- I added explicit helper docstrings for the nested search helper functions.
+- I added `FIT_CARD_TEMPERATURE = 1.0` after the spec required varied fit-card outputs.
+- I added response parsing guards for malformed Groq responses so LLM failures return user-facing error strings instead of crashing.
+
+### Instance 2: Planning loop and state-flow tests
+
+Input given to AI:
+- The `planning.md` Planning Loop, State Management, Error Handling, and Mermaid architecture diagram.
+- The numbered TODO steps inside `agent.py`.
+- The rubric note that the agent must respond differently to different inputs and must not call all three tools unconditionally.
+
+What the AI helped produce:
+- The `run_agent()` implementation that stores `parsed`, `search_results`, `selected_item`, `outfit_suggestion`, `fit_card`, and `error` in the session dictionary.
+- Integration tests that mock the three tools and verify the happy path, no-results path, and planning walkthrough path.
+
+What I reviewed, revised, or overrode:
+- I chose a deterministic regex parser for `description`, `size`, and `max_price` instead of asking an LLM to parse the query.
+- I tightened the integration tests to assert exact parsed arguments passed into `search_listings`.
+- I added the walkthrough test that prints `session["selected_item"]` and `session["outfit_suggestion"]`, then confirms those exact values flow into the next tool calls.
+
+### Instance 3: README and test documentation
+
+Input given to AI:
+- The completed implementation in `tools.py`, `agent.py`, and `app.py`.
+- The test names and failure cases from the `tests/` directory.
+- The README rubric sections: tool inventory, planning loop, state management, error handling, AI usage, and spec reflection.
+
+What the AI helped produce:
+- A README draft organized around the rubric.
+- Error handling table entries tied to concrete test names.
+- A concise spec reflection.
+
+What I reviewed, revised, or overrode:
+- I removed starter-kit language and replaced it with project-specific implementation details.
+- I made the README describe actual function signatures and current behavior rather than future plans.
+- I linked the state-management explanation to the integration test that proves state flows between tools.
+
 ## Spec Reflection
 
 One way the spec helped: requiring named function signatures and clear return values made the implementation easier to test in isolation. `search_listings`, `suggest_outfit`, and `create_fit_card` each have focused tests before being wired together through `run_agent`.
