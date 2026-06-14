@@ -1,0 +1,42 @@
+{
+  "snapshot_date": "2026-06-13",
+  "source": "Offline classroom trend snapshot adapted from public fashion tag patterns on Depop Explore, Pinterest Trends, and TikTok outfit hashtags.",
+  "trends": [
+    {
+      "id": "trend_graphic_tee_baggy_denim",
+      "name": "Graphic tee with baggy denim",
+      "platforms": ["Depop Explore", "TikTok outfit hashtags"],
+      "keywords": ["graphic", "tee", "baby", "band", "vintage"],
+      "style_tags": ["graphic tee", "baggy denim", "chunky sneakers", "streetwear", "y2k"],
+      "size_notes": "Works across letter sizes because the styling relies on proportion more than exact fit.",
+      "outfit_influence": "Lean into a relaxed silhouette: baggy jeans, chunky sneakers, and one compact accessory so the tee stays central."
+    },
+    {
+      "id": "trend_track_jacket_sporty_vintage",
+      "name": "Sporty vintage track layers",
+      "platforms": ["Pinterest Trends", "Depop Explore"],
+      "keywords": ["track", "jacket", "windbreaker", "90s", "athletic"],
+      "style_tags": ["sporty", "90s", "layering", "streetwear", "color block"],
+      "size_notes": "Oversized and true-to-size jackets both work; the trend favors easy layering.",
+      "outfit_influence": "Style the jacket with clean basics, relaxed pants, and sneakers so the vintage athletic layer feels intentional."
+    },
+    {
+      "id": "trend_cottagecore_midi",
+      "name": "Soft cottagecore midi styling",
+      "platforms": ["Pinterest Trends"],
+      "keywords": ["midi", "skirt", "floral", "linen", "cottagecore", "slip"],
+      "style_tags": ["cottagecore", "midi", "soft layers", "earth tones", "vintage"],
+      "size_notes": "Works best when the waist and length are comfortable; belts or cropped layers can adjust proportions.",
+      "outfit_influence": "Pair the piece with soft layers, earth tones, and simple accessories to keep the look romantic but wearable."
+    },
+    {
+      "id": "trend_combat_boot_grunge",
+      "name": "Combat boots with grunge basics",
+      "platforms": ["TikTok outfit hashtags", "Depop Explore"],
+      "keywords": ["combat", "boots", "black", "grunge", "mesh"],
+      "style_tags": ["grunge", "boots", "black denim", "layering", "streetwear"],
+      "size_notes": "Shoe sizing matters most; styling works with slim or relaxed bottoms.",
+      "outfit_influence": "Ground the outfit with black denim, layered tops, and a practical bag so the boots feel like the anchor."
+    }
+  ]
+}

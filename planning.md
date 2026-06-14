@@ -57,7 +57,7 @@ Example return value:
 ```
 
 **What happens if it fails or returns nothing:**
-The tool returns an empty list instead of crashing. The agent stores that empty result in session state, tells the user no matching listing was found, and does not call `suggest_outfit` with missing item data. For the stretch retry path, the agent may retry once with loosened filters, such as dropping the size filter or increasing the price ceiling slightly, and must tell the user exactly what was adjusted.
+The tool returns an empty list instead of crashing. The agent stores that empty result in session state, tells the user no matching listing was found, and does not call `suggest_outfit` with missing item data. For the stretch retry path, the agent may retry with loosened filters, such as dropping the size filter and then removing the price cap, and must tell the user exactly what was adjusted.
 
 ---
 
@@ -111,22 +111,65 @@ If `outfit` is empty, whitespace-only, or missing, the tool returns a specific e
 
 ### Additional Tools (if any)
 
-No extra tools are required for the first implementation. I will only implement the three required tools for the core submission. If I start a stretch feature later, I will update this section before coding it.
-
-### Possible Stretch Tool: compare_price
+### Stretch Tool: compare_price
 
 **What it does:**
-Compares the selected listing price against similar listings in the mock dataset.
+Compares the selected listing price against similar listings in the mock dataset. It checks same-category listings first, then prioritizes comparables with overlapping style tags or colors.
 
 **Input parameters:**
 - `item` (dict): The selected listing.
-- `listings` (list[dict]): Comparable mock listings from the same dataset.
+- `listings` (list[dict] | None): Optional comparable mock listings from the same dataset. If `None`, the tool uses `load_listings()`.
 
 **What it returns:**
-A `dict` with `assessment` (str), `average_comparable_price` (float), `price_difference` (float), and `reasoning` (str).
+A `dict` with:
+- `assessment` (str): `"good deal"`, `"fair price"`, `"priced high"`, or `"unknown"`.
+- `item_price` (float | None): The selected item's price.
+- `average_comparable_price` (float | None): Average price of comparable listings.
+- `price_difference` (float | None): Selected price minus comparable average.
+- `comparable_count` (int): Number of comparable listings used.
+- `comparables` (list[dict]): Up to five comparable listing summaries.
+- `reasoning` (str): Short explanation for the assessment.
 
 **What happens if it fails or returns nothing:**
 If there are not enough comparable listings, the tool returns an explanation that the dataset is too small for a confident price assessment.
+
+### Stretch Tool: check_trends
+
+**What it does:**
+Checks an offline trend snapshot in `data/trends.json` and returns trend context that can influence the outfit suggestion. This makes trend awareness deterministic for tests and demos.
+
+**Input parameters:**
+- `description` (str): The parsed search description, such as `"vintage graphic tee"`.
+- `size` (str | None): The user's requested size, stored in the result for display and future filtering.
+
+**What it returns:**
+A `dict` with:
+- `source` (str): Where the trend snapshot came from.
+- `snapshot_date` (str | None): Date of the snapshot.
+- `matched_trends` (list[dict]): Trends whose keywords overlap the search.
+- `trend_tags` (list[str]): Style tags from the matched trends.
+- `influence` (str): Styling guidance to pass into `suggest_outfit`.
+- `size` (str | None): The requested size.
+
+**What happens if it fails or returns nothing:**
+If the trend file cannot be loaded, the tool returns an empty trend result and explains that styling should rely on the selected item and wardrobe only.
+
+### Stretch Feature: style profile memory
+
+**What it does:**
+Stores remembered style preferences across sessions in `.fitfindr_style_profile.json`.
+
+**Input parameters:**
+- `query` (str): The user's latest request.
+- `wardrobe` (dict): The user's wardrobe.
+
+**What it returns:**
+A profile `dict` with:
+- `preferences` (list[str]): Remembered style terms such as `"grunge"`, `"streetwear"`, and `"chunky"`.
+- `interaction_count` (int): Number of interactions saved.
+
+**What happens if it fails or returns nothing:**
+If the memory file is missing or malformed, the agent starts with an empty profile. If saving fails, the agent continues the current interaction without crashing.
 
 ---
 
@@ -141,18 +184,23 @@ The agent uses a session dictionary and a loop that checks what information is a
    - `description`
    - `size`
    - `max_price`
-3. If the parsed description is missing, ask the user what kind of item they want before calling any tool.
-4. If there is no `search_results` in session state, call `search_listings(description, size, max_price)`.
-5. If `search_listings` returns an empty list, stop the happy path. The agent tells the user what failed and either:
-   - retries once with loosened constraints for the stretch path, or
-   - asks the user to broaden the item description, size, or budget.
-6. If search results exist but `selected_item` is empty, choose the top-ranked listing and store it as `selected_item`.
-7. If `selected_item` exists but `outfit_suggestion` is empty, call `suggest_outfit(selected_item, wardrobe)`.
-8. If `suggest_outfit` returns an empty or error response, tell the user the selected item could not be styled and ask for more wardrobe details or use general styling advice if possible.
-9. If `outfit_suggestion` exists but `fit_card` is empty, call `create_fit_card(outfit_suggestion, selected_item)`.
-10. The loop is done when `fit_card` is populated or when `session["error"]` is set.
+3. Update style memory from the query and wardrobe, then store it in `session["style_profile"]`.
+4. If the parsed description is missing, ask the user what kind of item they want before calling search.
+5. If there is no `search_results` in session state, call `search_listings(description, size, max_price)`.
+6. If `search_listings` returns an empty list, retry with loosened constraints:
+   - First retry with the size filter removed.
+   - If that still fails and the user gave a price cap, retry with the price cap removed.
+   - Store each fallback in `session["retry_attempts"]`.
+7. If all search attempts return empty lists, stop the happy path. The agent tells the user what failed, which fallbacks were tried, and asks the user to broaden the item description, size, or budget.
+8. If search results exist but `selected_item` is empty, choose the top-ranked listing and store it as `selected_item`.
+9. If `selected_item` exists, call `compare_price(selected_item)` and store the returned assessment.
+10. If `selected_item` exists, call `check_trends(description, size)` and store the trend context.
+11. If `selected_item` exists but `outfit_suggestion` is empty, call `suggest_outfit(selected_item, contextual_wardrobe)`, where `contextual_wardrobe` contains the original wardrobe plus the style profile and trend info.
+12. If `suggest_outfit` returns an empty or error response, tell the user the selected item could not be styled and ask for more wardrobe details or use general styling advice if possible.
+13. If `outfit_suggestion` exists but `fit_card` is empty, call `create_fit_card(outfit_suggestion, selected_item)`.
+14. The loop is done when `fit_card` is populated or when `session["error"]` is set.
 
-This makes the agent adaptive. For a normal query, it searches, styles the selected item, and creates a caption. For a no-result query like `"designer ballgown size XXS under $5"`, it stops after search and gives a specific no-results message instead of trying to create an outfit from nonexistent data.
+This makes the agent adaptive. For a normal query, it searches, checks price and trends, styles the selected item, and creates a caption. For a retry query like `"vintage graphic tee size XXS under $30"`, it tries the exact search first, then removes the size filter and continues only if that produces a listing. For a no-result query like `"designer ballgown size XXS under $5"`, it stops after fallback search attempts and gives a specific no-results message instead of trying to create an outfit from nonexistent data.
 
 ---
 
@@ -170,12 +218,19 @@ Tracked state:
 - `wardrobe`: The user's wardrobe dict.
 - `outfit_suggestion`: The string returned by `suggest_outfit`.
 - `fit_card`: The string returned by `create_fit_card`.
+- `price_assessment`: The dict returned by `compare_price`.
+- `trend_info`: The dict returned by `check_trends`.
+- `style_profile`: Remembered preferences loaded from and saved to `.fitfindr_style_profile.json`.
+- `retry_attempts`: Search fallback attempts and result counts.
+- `retry_message`: A user-facing explanation when fallback search succeeds.
 - `error`: A clear message if the workflow stops early.
 
 Data flow:
 - `search_listings` returns `search_results`.
 - The agent saves the first/best result as `selected_item`.
-- `selected_item` is passed directly into `suggest_outfit` as `new_item`; the user does not re-enter it.
+- `selected_item` is passed directly into `compare_price` and then into `suggest_outfit` as `new_item`; the user does not re-enter it.
+- `check_trends` uses the parsed description and size, then stores trend context in `trend_info`.
+- Style memory is attached to a copy of the wardrobe along with `trend_info`.
 - `suggest_outfit` returns `outfit_suggestion`.
 - `outfit_suggestion` and the same `selected_item` are passed directly into `create_fit_card`.
 - The final UI reads `selected_item`, `outfit_suggestion`, and `fit_card` from the session dict.
@@ -188,12 +243,16 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
-| `search_listings` | No results match the description, size, and price filters. | Store `search_results = []`, set a clear message like `"I couldn't find a vintage graphic tee in size M under $10. Try a higher budget or remove the size filter."`, and do not call `suggest_outfit`. For stretch retry, retry once with loosened constraints and tell the user what changed. |
+| `search_listings` | No results match the description, size, and price filters. | Store `search_results = []`, retry with loosened constraints, and do not call `suggest_outfit` unless a fallback search returns a listing. If all fallbacks fail, tell the user what to broaden. |
 | `search_listings` | Listings file cannot be loaded or has invalid data. | Catch the error, set `session["error"]`, and tell the user the listing catalog is unavailable instead of crashing. |
 | `suggest_outfit` | `wardrobe["items"]` is empty. | Return general styling advice based on the selected item category, colors, and style tags. Tell the user that no saved wardrobe items were available, so the suggestion uses general pieces. |
 | `suggest_outfit` | `new_item` is missing or malformed. | Return an actionable error string and stop before `create_fit_card`, because a fit card needs a real listing. |
 | `create_fit_card` | `outfit` input is missing, empty, or only whitespace. | Return `"I need an outfit suggestion before I can create a fit card."` The agent displays this as the fit card panel error. |
 | `create_fit_card` | `new_item` is missing key details like title, price, or platform. | Return a message explaining which details are missing and ask the user to choose another listing or retry the search. |
+| `compare_price` | The selected item is missing a usable price or there are no comparable listings. | Return `assessment = "unknown"` with a concrete reason, and continue the main workflow because outfit styling can still happen. |
+| `check_trends` | The trend snapshot file cannot be read. | Return empty trend context with a message explaining that styling will rely on the item and wardrobe only. |
+| Style profile memory | Memory file is missing, malformed, or cannot be saved. | Start from an empty profile or skip saving, then continue the current interaction without crashing. |
+| Retry fallback | Exact search returns no results. | Retry with size removed first, then price cap removed if needed. Tell the user what was adjusted if a retry succeeds, or list the fallback attempts if all retries fail. |
 
 ---
 
@@ -203,20 +262,24 @@ For each tool, describe the specific failure mode you're handling and what the a
 flowchart TD
     A[User query + wardrobe choice] --> B[Create session dict]
     B --> C[Parse query into description, size, max_price]
-    C --> D{Description found?}
+    C --> C2[Update style profile memory]
+    C2 --> D{Description found?}
     D -- No --> E[Ask user for item description]
+    E --> Z[Return session to UI]
     D -- Yes --> F[search_listings(description, size, max_price)]
 
     F --> G{Any matching listings?}
-    G -- No --> H[Set session error and suggest broader search]
-    H --> I{Stretch retry enabled?}
-    I -- Yes --> J[Retry with loosened filters]
+    G -- No --> J[Retry with loosened filters]
     J --> G
-    I -- No --> Z[Return session to UI]
+    G -- Still no --> H[Set session error and suggest broader search]
+    H --> Z[Return session to UI]
 
     G -- Yes --> K[Store search_results]
     K --> L[Select top result as selected_item]
-    L --> M[suggest_outfit(selected_item, wardrobe)]
+    L --> L2[compare_price(selected_item)]
+    L2 --> L3[check_trends(description, size)]
+    L3 --> L4[Attach style_profile and trend_info to wardrobe copy]
+    L4 --> M[suggest_outfit(selected_item, contextual_wardrobe)]
 
     M --> N{Outfit returned?}
     N -- No --> O[Set styling error or ask for wardrobe details]
@@ -264,6 +327,20 @@ I will verify the planning loop by running:
 
 I will also review any generated code manually to make sure it matches this spec instead of adding unrelated tools or changing function signatures.
 
+**Milestone 5 — Stretch features:**
+
+I will use ChatGPT/Codex to implement and test the four stretch features after the core workflow is working:
+- Price comparison with `compare_price(item, listings=None)`.
+- Style profile memory stored in `.fitfindr_style_profile.json`.
+- Trend awareness with `check_trends(description, size=None)` using a deterministic local trend snapshot.
+- Retry logic that removes the size filter first, then removes the price cap if no results are still found.
+
+I will verify the stretch work by running tests that prove:
+- Price comparison returns an assessment and reasoning based on comparable listings.
+- Style memory persists across two sessions without the user re-entering preferences.
+- Trend context is passed into the `suggest_outfit` LLM prompt.
+- The planning loop continues after a successful fallback search, but still stops gracefully when every fallback fails.
+
 ---
 
 ## A Complete Interaction (Step by Step)
@@ -285,6 +362,8 @@ session["parsed"] = {
 ```
 
 The wardrobe is loaded from the example wardrobe, which includes items like baggy straight-leg jeans, chunky white sneakers, a vintage black denim jacket, and a black crossbody bag.
+
+The agent also updates style memory from the query and wardrobe. For this example, the remembered profile can include terms like `baggy`, `chunky`, `streetwear`, and `vintage`.
 
 **Step 2: Search listings**
 
@@ -315,20 +394,31 @@ The tool searches the mock listings dataset and returns matching items. A likely
 
 The agent stores the full result list in `session["search_results"]` and stores the best result in `session["selected_item"]`.
 
-If there are no matches, the agent stops here, explains that no listing matched the user's size/price/style constraints, and asks the user to loosen one of those constraints.
+If there are no exact matches, the agent retries by removing the size filter first, then removing the price cap if needed. If every fallback fails, the agent stops here, explains that no listing matched the user's constraints, lists the fallback attempts, and asks the user to loosen one of those constraints.
 
-**Step 3: Suggest an outfit**
+**Step 3: Compare price and check trends**
+
+Because `session["selected_item"]` exists, the agent calls:
+
+```python
+compare_price(session["selected_item"])
+check_trends(description="vintage graphic tee", size="M")
+```
+
+The price result is stored in `session["price_assessment"]`. The trend result is stored in `session["trend_info"]`, then passed into the outfit prompt so the styling can visibly reflect current graphic tee, baggy denim, and chunky sneaker trends.
+
+**Step 4: Suggest an outfit**
 
 Because `session["selected_item"]` exists, the agent calls:
 
 ```python
 suggest_outfit(
     new_item=session["selected_item"],
-    wardrobe=session["wardrobe"],
+    wardrobe=contextual_wardrobe,
 )
 ```
 
-The tool uses the selected tee plus the wardrobe items to suggest complete outfits, for example:
+`contextual_wardrobe` contains the original wardrobe items plus `session["style_profile"]` and `session["trend_info"]`. The tool uses the selected tee, the wardrobe items, remembered style preferences, and trend context to suggest complete outfits, for example:
 
 ```text
 Outfit 1: Wear the Y2K Baby Tee — Butterfly Print with the baggy straight-leg jeans, chunky white sneakers, and black crossbody bag for an easy vintage streetwear outfit.
@@ -340,7 +430,7 @@ The agent stores this in `session["outfit_suggestion"]`.
 
 If the wardrobe is empty, the tool still returns a useful suggestion using general items, such as relaxed denim, white sneakers, and a small bag. The agent tells the user the suggestion is general because no saved wardrobe items were available.
 
-**Step 4: Create the fit card**
+**Step 5: Create the fit card**
 
 Because `session["outfit_suggestion"]` exists, the agent calls:
 
@@ -363,7 +453,7 @@ The agent stores this in `session["fit_card"]`.
 
 The user sees three panels:
 
-1. Top listing found: the selected listing title, price, size, platform, condition, colors, and short description.
+1. Top listing found: the selected listing title, price, size, platform, condition, colors, short description, price check, trend context, style memory, and fallback message when applicable.
 2. Outfit idea: one or two complete outfit suggestions using the selected item and wardrobe.
 3. Fit card: a short shareable caption for the outfit.
 

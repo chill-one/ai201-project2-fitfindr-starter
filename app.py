@@ -75,6 +75,37 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         f"{selected_item.get('description', '')}"
     )
 
+    stretch_notes = []
+    if session.get("retry_message"):
+        stretch_notes.append(f"Search fallback: {session['retry_message']}")
+
+    price_assessment = session.get("price_assessment") or {}
+    if price_assessment.get("assessment"):
+        stretch_notes.append(
+            "Price check: "
+            f"{price_assessment['assessment']} — "
+            f"{price_assessment.get('reasoning', '')}"
+        )
+
+    trend_info = session.get("trend_info") or {}
+    if trend_info.get("matched_trends"):
+        trend_names = ", ".join(
+            trend.get("name", "unnamed trend")
+            for trend in trend_info.get("matched_trends", [])
+        )
+        stretch_notes.append(
+            f"Trend awareness: {trend_names}. {trend_info.get('influence', '')}"
+        )
+
+    style_profile = session.get("style_profile") or {}
+    if style_profile.get("preferences"):
+        stretch_notes.append(
+            "Style memory used: " + ", ".join(style_profile["preferences"])
+        )
+
+    if stretch_notes:
+        listing_text += "\n\n" + "\n".join(stretch_notes)
+
     return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 

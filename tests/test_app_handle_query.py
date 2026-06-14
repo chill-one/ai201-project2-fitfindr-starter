@@ -99,6 +99,42 @@ def test_success_session_formats_listing_outfit_and_fit_card(monkeypatch):
     assert fit_card == session["fit_card"]
 
 
+def test_success_session_includes_stretch_notes(monkeypatch):
+    session = {
+        "error": None,
+        "selected_item": LISTING,
+        "outfit_suggestion": "Wear it with baggy jeans and chunky sneakers.",
+        "fit_card": "Butterfly tee, big denim, easy thrifted fit.",
+        "retry_message": (
+            "No exact matches were found, so I retried with a loosened "
+            "constraint: removed size filter XXS."
+        ),
+        "price_assessment": {
+            "assessment": "good deal",
+            "reasoning": "Comparable dataset listings average $24.00.",
+        },
+        "trend_info": {
+            "matched_trends": [
+                {"name": "Graphic tee with baggy denim"},
+            ],
+            "influence": "Lean into baggy jeans and chunky sneakers.",
+        },
+        "style_profile": {
+            "preferences": ["chunky", "grunge", "streetwear"],
+        },
+    }
+    monkeypatch.setattr(app, "get_example_wardrobe", Mock(return_value={"items": []}))
+    monkeypatch.setattr(app, "run_agent", Mock(return_value=session))
+
+    listing_text, _, _ = app.handle_query("graphic tee size XXS", "Example wardrobe")
+
+    assert "Search fallback:" in listing_text
+    assert "removed size filter XXS" in listing_text
+    assert "Price check: good deal" in listing_text
+    assert "Trend awareness: Graphic tee with baggy denim" in listing_text
+    assert "Style memory used: chunky, grunge, streetwear" in listing_text
+
+
 def test_missing_selected_item_returns_first_panel_error(monkeypatch):
     monkeypatch.setattr(app, "get_example_wardrobe", Mock(return_value={"items": []}))
     monkeypatch.setattr(

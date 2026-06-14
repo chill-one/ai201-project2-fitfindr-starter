@@ -12,8 +12,10 @@ Tools:
     create_fit_card(outfit, new_item)               → str
 """
 
+import json
 import os
 import re
+from pathlib import Path
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -24,6 +26,7 @@ load_dotenv()
 
 GROQ_MODEL = "llama-3.3-70b-versatile"
 FIT_CARD_TEMPERATURE = 1.0
+TRENDS_PATH = Path(__file__).parent / "data" / "trends.json"
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────
@@ -166,6 +169,170 @@ def search_listings(
     return [listing for _, _, listing in scored_listings]
 
 
+# ── Stretch Tool: compare_price ────────────────────────────────────────────────
+
+def compare_price(item: dict, listings: list[dict] | None = None) -> dict:
+    """
+    Estimate whether a listing price is fair using comparable dataset items.
+
+    Comparables prioritize listings in the same category with overlapping style
+    tags or colors. If that is too narrow, the tool falls back to same-category
+    listings so the user still gets a useful price assessment.
+    """
+    if not isinstance(item, dict) or not item:
+        return {
+            "assessment": "unknown",
+            "item_price": None,
+            "average_comparable_price": None,
+            "comparable_count": 0,
+            "comparables": [],
+            "reasoning": "A selected item is required before comparing price.",
+        }
+
+    try:
+        item_price = float(item["price"])
+    except (KeyError, TypeError, ValueError):
+        return {
+            "assessment": "unknown",
+            "item_price": None,
+            "average_comparable_price": None,
+            "comparable_count": 0,
+            "comparables": [],
+            "reasoning": "The selected item is missing a usable price.",
+        }
+
+    if listings is None:
+        try:
+            listings = load_listings()
+        except (OSError, ValueError):
+            listings = []
+
+    item_id = item.get("id")
+    item_category = item.get("category")
+    item_tags = {tag.lower() for tag in item.get("style_tags", [])}
+    item_colors = {color.lower() for color in item.get("colors", [])}
+
+    same_category = [
+        listing for listing in listings
+        if isinstance(listing, dict)
+        and listing.get("id") != item_id
+        and listing.get("category") == item_category
+        and isinstance(listing.get("price"), (int, float))
+    ]
+    comparable_listings = [
+        listing for listing in same_category
+        if item_tags & {tag.lower() for tag in listing.get("style_tags", [])}
+        or item_colors & {color.lower() for color in listing.get("colors", [])}
+    ]
+
+    if len(comparable_listings) < 2:
+        comparable_listings = same_category
+
+    if not comparable_listings:
+        return {
+            "assessment": "unknown",
+            "item_price": item_price,
+            "average_comparable_price": None,
+            "comparable_count": 0,
+            "comparables": [],
+            "reasoning": "There are not enough comparable listings in the dataset.",
+        }
+
+    average_price = sum(float(listing["price"]) for listing in comparable_listings) / len(
+        comparable_listings
+    )
+    price_difference = item_price - average_price
+
+    if item_price <= average_price * 0.9:
+        assessment = "good deal"
+    elif item_price <= average_price * 1.1:
+        assessment = "fair price"
+    else:
+        assessment = "priced high"
+
+    comparables = [
+        {
+            "id": listing.get("id"),
+            "title": listing.get("title"),
+            "price": listing.get("price"),
+        }
+        for listing in sorted(comparable_listings, key=lambda listing: listing["price"])[:5]
+    ]
+
+    return {
+        "assessment": assessment,
+        "item_price": round(item_price, 2),
+        "average_comparable_price": round(average_price, 2),
+        "price_difference": round(price_difference, 2),
+        "comparable_count": len(comparable_listings),
+        "comparables": comparables,
+        "reasoning": (
+            f"This {item_category or 'item'} is ${item_price:.2f}. "
+            f"Comparable dataset listings average ${average_price:.2f}, "
+            f"so it is {assessment}."
+        ),
+    }
+
+
+# ── Stretch Tool: check_trends ─────────────────────────────────────────────────
+
+def check_trends(description: str, size: str | None = None) -> dict:
+    """
+    Return trend context that can influence outfit suggestions.
+
+    The tool reads an offline trend snapshot adapted from public fashion tag
+    patterns. This keeps the demo deterministic while still making trend context
+    explicit and testable.
+    """
+    try:
+        with open(TRENDS_PATH, "r", encoding="utf-8") as trend_file:
+            snapshot = json.load(trend_file)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "source": "unavailable",
+            "snapshot_date": None,
+            "matched_trends": [],
+            "trend_tags": [],
+            "influence": "Trend data is unavailable, so the outfit suggestion will rely on the item and wardrobe only.",
+            "size": size,
+        }
+
+    query_tokens = set(re.findall(r"[a-z0-9]+", (description or "").lower()))
+    scored_trends = []
+    for trend in snapshot.get("trends", []):
+        keywords = {keyword.lower() for keyword in trend.get("keywords", [])}
+        style_tags = {tag.lower() for tag in trend.get("style_tags", [])}
+        score = len(query_tokens & (keywords | style_tags))
+        if score:
+            scored_trends.append((score, trend))
+
+    scored_trends.sort(key=lambda trend_score: trend_score[0], reverse=True)
+    matched_trends = [trend for _, trend in scored_trends[:2]]
+
+    if not matched_trends and snapshot.get("trends"):
+        matched_trends = [snapshot["trends"][0]]
+
+    trend_tags = []
+    influences = []
+    for trend in matched_trends:
+        trend_tags.extend(trend.get("style_tags", []))
+        influences.append(f"{trend.get('name')}: {trend.get('outfit_influence')}")
+
+    unique_tags = list(dict.fromkeys(trend_tags))
+    influence = " ".join(influences) if influences else (
+        "No direct trend match was found, so the outfit suggestion should stay wardrobe-led."
+    )
+
+    return {
+        "source": snapshot.get("source", "offline trend snapshot"),
+        "snapshot_date": snapshot.get("snapshot_date"),
+        "matched_trends": matched_trends,
+        "trend_tags": unique_tags,
+        "influence": influence,
+        "size": size,
+    }
+
+
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
 
 def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
@@ -201,11 +368,15 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         )
 
     wardrobe_items = []
+    style_profile = {}
+    trend_info = {}
     if isinstance(wardrobe, dict) and isinstance(wardrobe.get("items"), list):
         wardrobe_items = [
             item for item in wardrobe["items"]
             if isinstance(item, dict) and item.get("name")
         ]
+        style_profile = wardrobe.get("_style_profile") or {}
+        trend_info = wardrobe.get("_trend_info") or {}
 
     item_summary = (
         f"Title: {new_item['title']}\n"
@@ -214,6 +385,26 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         f"Colors: {', '.join(new_item.get('colors', []))}\n"
         f"Price/platform: ${new_item['price']} on {new_item['platform']}"
     )
+
+    context_sections = []
+    remembered_preferences = style_profile.get("preferences", [])
+    if remembered_preferences:
+        context_sections.append(
+            "Remembered style profile: "
+            + ", ".join(remembered_preferences)
+            + ". Use these preferences when choosing the outfit vibe."
+        )
+
+    if trend_info.get("matched_trends"):
+        context_sections.append(
+            "Current trend context: "
+            + trend_info.get("influence", "")
+            + " Trend tags: "
+            + ", ".join(trend_info.get("trend_tags", []))
+            + ". Let this influence the outfit suggestion visibly."
+        )
+
+    extra_context = "\n\n".join(context_sections)
 
     if wardrobe_items:
         wardrobe_summary = "\n".join(
@@ -232,6 +423,8 @@ New thrifted item:
 User wardrobe:
 {wardrobe_summary}
 
+{extra_context}
+
 Suggest 1-2 complete outfits using the new item. Use exact wardrobe item names
 when possible, and fill in any missing category with a simple general piece.
 Keep the answer specific, concise, and wearable.
@@ -244,6 +437,9 @@ New thrifted item:
 The user has no saved wardrobe items yet. Suggest 1-2 complete outfits using
 general clothing categories instead of named closet pieces. Mention that these
 are general styling ideas because no wardrobe items were provided.
+
+{extra_context}
+
 Keep the answer specific, concise, and wearable.
 """.strip()
 

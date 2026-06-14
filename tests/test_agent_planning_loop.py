@@ -64,11 +64,16 @@ def test_happy_path_passes_state_between_all_three_tools(monkeypatch):
     monkeypatch.setattr(agent, "search_listings", search)
     monkeypatch.setattr(agent, "suggest_outfit", suggest)
     monkeypatch.setattr(agent, "create_fit_card", create)
+    monkeypatch.setattr(agent, "update_style_profile", Mock(return_value={"preferences": []}))
 
     session = agent.run_agent("vintage graphic tee under $30 size M", WARDROBE)
 
     search.assert_called_once_with("vintage graphic tee", "M", 30.0)
-    suggest.assert_called_once_with(LISTING, WARDROBE)
+    suggest_item, suggest_wardrobe = suggest.call_args.args
+    assert suggest_item is LISTING
+    assert suggest_wardrobe["items"] == WARDROBE["items"]
+    assert "_style_profile" in suggest_wardrobe
+    assert "_trend_info" in suggest_wardrobe
     create.assert_called_once_with(suggest.return_value, LISTING)
     assert session["error"] is None
     assert session["search_results"] == [LISTING]
@@ -85,10 +90,13 @@ def test_no_search_results_stops_before_outfit_and_fit_card(monkeypatch):
     monkeypatch.setattr(agent, "search_listings", search)
     monkeypatch.setattr(agent, "suggest_outfit", suggest)
     monkeypatch.setattr(agent, "create_fit_card", create)
+    monkeypatch.setattr(agent, "update_style_profile", Mock(return_value={"preferences": []}))
 
     session = agent.run_agent("designer ballgown size XXS under $5", WARDROBE)
 
-    search.assert_called_once_with("designer ballgown", "XXS", 5.0)
+    assert search.call_args_list[0].args == ("designer ballgown", "XXS", 5.0)
+    assert search.call_args_list[1].args == ("designer ballgown", None, 5.0)
+    assert search.call_args_list[2].args == ("designer ballgown", None, None)
     suggest.assert_not_called()
     create.assert_not_called()
     assert session["error"]
@@ -99,20 +107,23 @@ def test_no_search_results_stops_before_outfit_and_fit_card(monkeypatch):
 
 
 def test_agent_takes_different_paths_for_success_and_no_results(monkeypatch):
-    search = Mock(side_effect=[[LISTING], []])
+    search = Mock(side_effect=[[LISTING], [], [], []])
     suggest = Mock(return_value="Wear it with baggy jeans and chunky sneakers.")
     create = Mock(return_value="Butterfly tee, big denim, easy thrifted fit.")
 
     monkeypatch.setattr(agent, "search_listings", search)
     monkeypatch.setattr(agent, "suggest_outfit", suggest)
     monkeypatch.setattr(agent, "create_fit_card", create)
+    monkeypatch.setattr(agent, "update_style_profile", Mock(return_value={"preferences": []}))
 
     successful_session = agent.run_agent("vintage graphic tee under $30", WARDROBE)
     failed_session = agent.run_agent("designer ballgown size XXS under $5", WARDROBE)
 
-    assert search.call_count == 2
+    assert search.call_count == 4
     assert search.call_args_list[0].args == ("vintage graphic tee", None, 30.0)
     assert search.call_args_list[1].args == ("designer ballgown", "XXS", 5.0)
+    assert search.call_args_list[2].args == ("designer ballgown", None, 5.0)
+    assert search.call_args_list[3].args == ("designer ballgown", None, None)
     assert suggest.call_count == 1
     assert create.call_count == 1
     assert successful_session["fit_card"] == create.return_value
@@ -134,6 +145,11 @@ def test_planning_walkthrough_query_preserves_state_between_tool_calls(monkeypat
     monkeypatch.setattr(agent, "search_listings", search)
     monkeypatch.setattr(agent, "suggest_outfit", suggest)
     monkeypatch.setattr(agent, "create_fit_card", create)
+    monkeypatch.setattr(
+        agent,
+        "update_style_profile",
+        Mock(return_value={"preferences": ["baggy", "chunky", "streetwear"]}),
+    )
 
     session = agent.run_agent(
         "I'm looking for a vintage graphic tee under $30, size M. "
@@ -146,11 +162,14 @@ def test_planning_walkthrough_query_preserves_state_between_tool_calls(monkeypat
     print("outfit_suggestion:", session["outfit_suggestion"])
 
     selected_item_passed_to_suggest = suggest.call_args.args[0]
+    wardrobe_passed_to_suggest = suggest.call_args.args[1]
     outfit_passed_to_create = create.call_args.args[0]
     selected_item_passed_to_create = create.call_args.args[1]
 
     assert session["selected_item"] is LISTING
     assert selected_item_passed_to_suggest is session["selected_item"]
+    assert wardrobe_passed_to_suggest["_style_profile"] == session["style_profile"]
+    assert wardrobe_passed_to_suggest["_trend_info"] == session["trend_info"]
     assert selected_item_passed_to_create is session["selected_item"]
     assert session["outfit_suggestion"] == outfit
     assert outfit_passed_to_create == session["outfit_suggestion"]
